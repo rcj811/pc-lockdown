@@ -1,0 +1,43 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安裝 MinGW-w64 交叉編譯器
+        run: sudo apt-get update && sudo apt-get install -y g++-mingw-w64-i686 binutils-mingw-w64-i686
+
+      - name: 編譯
+        run: sh ./build.sh
+
+      - name: 檢查 XP 相容性（PE 標頭必須是 5.1）
+        run: |
+          i686-w64-mingw32-objdump -p dist/PcLockdown.exe | grep -E "MajorOSystemVersion\s+5"
+          i686-w64-mingw32-objdump -p dist/PcLockdown.exe | grep -E "MajorSubsystemVersion\s+5"
+          i686-w64-mingw32-objdump -p dist/PcLockdown.exe | grep "DLL Name"
+
+      - name: 上傳編譯結果
+        uses: actions/upload-artifact@v4
+        with:
+          name: PcLockdown
+          path: dist/PcLockdown.exe
+
+      - name: 更新「latest」下載頁
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete latest -y --cleanup-tag || true
+          gh release create latest dist/PcLockdown.exe \
+            --title "PC Lockdown 最新版" \
+            --notes "自動編譯版本（commit ${GITHUB_SHA::7}）。支援 Windows XP SP3 ~ Windows 11，下載 PcLockdown.exe 即可直接執行。" \
+            --target "$GITHUB_SHA"

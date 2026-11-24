@@ -1,0 +1,58 @@
+// 資源檔只放英文字，中文在程式執行時才設定，避免編譯器字碼頁問題
+#include <windows.h>
+#include "../src/resource.h"
+
+1 24 "app.manifest"
+
+IDD_MAIN DIALOGEX 0, 0, 270, 175
+STYLE DS_SHELLFONT | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
+CAPTION "PC Lockdown"
+FONT 9, "MS Shell Dlg", 0, 0, 1
+BEGIN
+    GROUPBOX        "USB", IDC_GRP_USB, 7, 7, 256, 74
+    AUTORADIOBUTTON "Allow", IDC_USB_ALLOW, 16, 22, 230, 10, WS_GROUP | WS_TABSTOP
+    AUTORADIOBUTTON "ReadOnly", IDC_USB_RO, 16, 36, 230, 10
+    AUTORADIOBUTTON "Block", IDC_USB_BLOCK, 16, 50, 230, 10
+    LTEXT           "", IDC_USB_STATUS, 16, 65, 240, 10
+    LTEXT           "", IDC_SYSINFO, 7, 88, 256, 10
+    LTEXT           "", IDC_NOTE, 7, 102, 256, 40
+    PUSHBUTTON      "Apply", IDC_APPLY, 7, 152, 64, 16, WS_TABSTOP
+    PUSHBUTTON      "Password", IDC_CHPWD, 77, 152, 64, 16, WS_TABSTOP
+    PUSHBUTTON      "Exit", IDCANCEL, 199, 152, 64, 16, WS_TABSTOP
+END
+
+IDD_PWD DIALOGEX 0, 0, 210, 92
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Password"
+FONT 9, "MS Shell Dlg", 0, 0, 1
+BEGIN
+    LTEXT           "", IDC_PWD_LABEL1, 7, 10, 62, 10
+    EDITTEXT        IDC_PWD1, 72, 8, 131, 13, ES_PASSWORD | ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "", IDC_PWD_LABEL2, 7, 29, 62, 10
+    EDITTEXT        IDC_PWD2, 72, 27, 131, 13, ES_PASSWORD | ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "", IDC_PWD_MSG, 7, 48, 196, 18
+    DEFPUSHBUTTON   "OK", IDOK, 97, 71, 50, 14, WS_TABSTOP
+    PUSHBUTTON      "Cancel", IDCANCEL, 153, 71, 50, 14, WS_TABSTOP
+END
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 0,1,0,0
+ PRODUCTVERSION 0,1,0,0
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040404b0"
+        BEGIN
+            VALUE "FileDescription", "PC Lockdown"
+            VALUE "FileVersion", "0.1.0"
+            VALUE "ProductName", "PC Lockdown"
+            VALUE "ProductVersion", "0.1.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0404, 1200
+    END
+END
