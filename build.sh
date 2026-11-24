@@ -11,9 +11,9 @@ $WINDRES -O coff res/app.rc -o dist/app.res
 $CXX -O2 -s -municode -mwindows \
   -D_WIN32_WINNT=0x0501 -DWINVER=0x0501 -DUNICODE -D_UNICODE \
   -fno-exceptions -fno-rtti -Wall \
-  src/main.cpp src/reg.cpp src/usb.cpp src/sha256.cpp dist/app.res \
+  src/main.cpp src/reg.cpp src/sys.cpp src/items.cpp src/service.cpp src/sha256.cpp dist/app.res \
   -static -static-libgcc -static-libstdc++ \
-  -lcomctl32 -ladvapi32 -luser32 -lkernel32 \
+  -lcomctl32 -liphlpapi -lshell32 -lole32 -luuid -ladvapi32 -luser32 -lkernel32 \
   -Wl,--major-subsystem-version,5,--minor-subsystem-version,1 \
   -Wl,--major-os-version,5,--minor-os-version,1 \
   -o dist/PcLockdown.exe

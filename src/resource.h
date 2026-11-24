@@ -3,11 +3,12 @@
 #define IDD_MAIN         100
 #define IDD_PWD          101
 
-// 主視窗：每一項 = 名稱 + 開關按鈕
-#define IDC_USB_LABEL    1001
-#define IDC_USB_TOGGLE   1002
+// 主視窗：第 i 項 = 名稱 IDC_LABEL0+i、開關 IDC_TOGGLE0+i
+#define IDC_LABEL0       2100
+#define IDC_TOGGLE0      2000
 #define IDC_SYSINFO      1006
 #define IDC_CHPWD        1009
+#define IDC_UNINSTALL    1010
 
 #define IDC_PWD_LABEL1   1101
 #define IDC_PWD1         1102

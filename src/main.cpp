@@ -1,4 +1,4 @@
-// PC Lockdown v0.1 — Windows 權限開關（最小測試版）
+// PC Lockdown — Windows 權限開關
 // 目標：Windows XP SP3 ~ Windows 11，單一 exe、免安裝執行環境
 #include <windows.h>
 #include <commctrl.h>
@@ -7,11 +7,12 @@
 #include <stdint.h>
 #include "resource.h"
 #include "reg.h"
-#include "usb.h"
+#include "sys.h"
+#include "items.h"
+#include "service.h"
 #include "sha256.h"
 
-#define APP_VERSION L"0.2.0"
-static const wchar_t* kAppKey = L"SOFTWARE\\PcLockdown";
+#define APP_VERSION L"1.0.0"
 static const wchar_t* kAppTitle = L"PC Lockdown 電腦權限管理 v" APP_VERSION;
 
 // ───────── 密碼 ─────────
@@ -132,53 +133,24 @@ static bool RunPwdDialog(HWND parent, int mode) {
     return DialogBoxParamW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDD_PWD), parent, PwdDlgProc, (LPARAM)&d) == IDOK;
 }
 
-// ───────── 系統資訊 ─────────
-
-typedef LONG (WINAPI *RtlGetVersionFn)(OSVERSIONINFOEXW*);
-typedef BOOL (WINAPI *IsWow64ProcessFn)(HANDLE, PBOOL);
-
-static void GetOsText(wchar_t* out, int cch) {
-    OSVERSIONINFOEXW v; ZeroMemory(&v, sizeof(v)); v.dwOSVersionInfoSize = sizeof(v);
-    RtlGetVersionFn rgv = (RtlGetVersionFn)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion");
-    if (!rgv || rgv(&v) != 0) GetVersionExW((OSVERSIONINFOW*)&v);
-
-    const wchar_t* name = L"Windows";
-    DWORD M = v.dwMajorVersion, m = v.dwMinorVersion;
-    if (M == 5 && m == 1) name = L"Windows XP";
-    else if (M == 5 && m == 2) name = L"Windows XP x64 / Server 2003";
-    else if (M == 6 && m == 0) name = L"Windows Vista";
-    else if (M == 6 && m == 1) name = L"Windows 7";
-    else if (M == 6 && m == 2) name = L"Windows 8";
-    else if (M == 6 && m == 3) name = L"Windows 8.1";
-    else if (M == 10) name = v.dwBuildNumber >= 22000 ? L"Windows 11" : L"Windows 10";
-
-    BOOL wow = FALSE;
-    IsWow64ProcessFn iw = (IsWow64ProcessFn)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "IsWow64Process");
-    if (iw) iw(GetCurrentProcess(), &wow);
-
-    _snwprintf(out, cch - 1, L"系統：%ls %ls（版本 %lu.%lu.%lu，%ls）", name, v.szCSDVersion,
-               M, m, v.dwBuildNumber, wow ? L"64 位元" : L"32 位元");
-    out[cch - 1] = 0;
-}
-
-static bool IsAdmin() {
-    SID_IDENTIFIER_AUTHORITY nt = SECURITY_NT_AUTHORITY;
-    PSID admins = NULL;
-    BOOL member = FALSE;
-    if (AllocateAndInitializeSid(&nt, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS,
-                                 0, 0, 0, 0, 0, 0, &admins)) {
-        if (!CheckTokenMembership(NULL, admins, &member)) member = FALSE;
-        FreeSid(admins);
-    }
-    return member != FALSE;
-}
-
 // ───────── 主視窗 ─────────
 
 // 開關按鈕：按下 = 開（可以使用），彈起 = 關（不能使用）
 static void ShowToggle(HWND dlg, int id, bool on) {
-    CheckDlgButton(dlg, id, on ? BST_CHECKED : BST_UNCHECKED);
-    SetDlgItemTextW(dlg, id, on ? L"開" : L"關");
+    CheckDlgButton(dlg, IDC_TOGGLE0 + id, on ? BST_CHECKED : BST_UNCHECKED);
+    SetDlgItemTextW(dlg, IDC_TOGGLE0 + id, on ? L"開" : L"關");
+}
+
+static void DoUninstall(HWND dlg) {
+    if (MessageBoxW(dlg, L"確定要解除安裝嗎？\r\n所有項目都會恢復成「開」，背景服務也會移除。",
+                    kAppTitle, MB_ICONQUESTION | MB_YESNO | MB_DEFBUTTON2) != IDYES) return;
+    HCURSOR old = SetCursor(LoadCursorW(NULL, IDC_WAIT));
+    UninstallService();          // 先停服務，避免它把設定改回去
+    ItemAllowAll();
+    RegDeleteTreeAt(HKEY_LOCAL_MACHINE, kAppKey);
+    SetCursor(old);
+    MessageBoxW(dlg, L"已解除安裝。部分項目要重新開機後才會完全恢復。", kAppTitle, MB_ICONINFORMATION);
+    EndDialog(dlg, 0);
 }
 
 static INT_PTR CALLBACK MainDlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
@@ -186,36 +158,46 @@ static INT_PTR CALLBACK MainDlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_INITDIALOG: {
         SetWindowTextW(dlg, kAppTitle);
-        SetDlgItemTextW(dlg, IDC_USB_LABEL, L"USB 隨身碟");
+        for (int i = 0; i < ITEM_COUNT; i++) {
+            SetDlgItemTextW(dlg, IDC_LABEL0 + i, kItems[i].label);
+            ShowToggle(dlg, i, ItemGetAllowed(i));
+        }
         SetDlgItemTextW(dlg, IDC_CHPWD, L"變更密碼");
+        SetDlgItemTextW(dlg, IDC_UNINSTALL, L"解除安裝");
         SetDlgItemTextW(dlg, IDCANCEL, L"結束");
         wchar_t os[200];
         GetOsText(os, 200);
         SetDlgItemTextW(dlg, IDC_SYSINFO, os);
-        ShowToggle(dlg, IDC_USB_TOGGLE, UsbIsEnabled(NULL));
         HICON ic = LoadIconW(NULL, MAKEINTRESOURCEW(32518));  // IDI_SHIELD，XP 沒有時回傳 NULL
         if (!ic) ic = LoadIconW(NULL, IDI_APPLICATION);
         SendMessageW(dlg, WM_SETICON, ICON_BIG, (LPARAM)ic);
         SendMessageW(dlg, WM_SETICON, ICON_SMALL, (LPARAM)ic);
         return TRUE;
     }
-    case WM_COMMAND:
-        switch (LOWORD(wp)) {
-        case IDC_USB_TOGGLE: {
-            bool on = IsDlgButtonChecked(dlg, IDC_USB_TOGGLE) == BST_CHECKED;
-            bool installed = false;
-            UsbIsEnabled(&installed);
-            if (!on && !installed) {
-                MessageBoxW(dlg, L"這台電腦還沒插過隨身碟，請先插一次再關閉。", kAppTitle, MB_ICONWARNING);
-            } else if (!UsbSetEnabled(on)) {
-                MessageBoxW(dlg, L"設定失敗，請用系統管理員身分執行。", kAppTitle, MB_ICONERROR);
+    case WM_COMMAND: {
+        int cid = LOWORD(wp);
+        if (cid >= IDC_TOGGLE0 && cid < IDC_TOGGLE0 + ITEM_COUNT) {
+            int id = cid - IDC_TOGGLE0;
+            bool on = IsDlgButtonChecked(dlg, cid) == BST_CHECKED;
+            HCURSOR old = SetCursor(LoadCursorW(NULL, IDC_WAIT));
+            bool ok = ItemSet(id, on);
+            SetCursor(old);
+            ShowToggle(dlg, id, ItemGetAllowed(id));
+            if (!ok) {
+                MessageBoxW(dlg, L"設定失敗。", kAppTitle, MB_ICONERROR);
+            } else {
+                const wchar_t* note = on ? kItems[id].onNote : kItems[id].offNote;
+                if (note) MessageBoxW(dlg, note, kItems[id].label, MB_ICONINFORMATION);
             }
-            ShowToggle(dlg, IDC_USB_TOGGLE, UsbIsEnabled(NULL));
             return TRUE;
         }
+        switch (cid) {
         case IDC_CHPWD:
             if (RunPwdDialog(dlg, 1))
                 MessageBoxW(dlg, L"密碼已變更。", kAppTitle, MB_ICONINFORMATION);
+            return TRUE;
+        case IDC_UNINSTALL:
+            DoUninstall(dlg);
             return TRUE;
         case IDCANCEL:
             EndDialog(dlg, 0);
@@ -223,10 +205,13 @@ static INT_PTR CALLBACK MainDlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
         }
         break;
     }
+    }
     return FALSE;
 }
 
-int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
+int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int) {
+    if (cmd && wcsstr(cmd, L"/service")) return RunAsService();
+
     // 同時只允許開一個
     HANDLE mtx = CreateMutexW(NULL, TRUE, L"PcLockdown_SingleInstance");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
@@ -239,19 +224,21 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     if (!InitCommonControlsEx(&icc)) InitCommonControls();
 
     if (!IsAdmin()) {
-        MessageBoxW(NULL, L"請用「系統管理員」帳號執行本程式。\r\n"
-                          L"（Windows 7 以後：在程式上按右鍵 →「以系統管理員身分執行」）",
-                    kAppTitle, MB_ICONERROR);
+        MessageBoxW(NULL, L"請用「系統管理員」帳號執行本程式。", kAppTitle, MB_ICONERROR);
         return 1;
     }
 
     if (!PasswordIsSet()) {
-        MessageBoxW(NULL, L"第一次使用，請先設定管理密碼。\r\n之後每次開啟本程式都要輸入這個密碼。",
-                    kAppTitle, MB_ICONINFORMATION);
+        MessageBoxW(NULL, L"第一次使用，請先設定管理密碼。", kAppTitle, MB_ICONINFORMATION);
         if (!RunPwdDialog(NULL, 1)) return 0;
     } else if (!RunPwdDialog(NULL, 0)) {
         return 0;
     }
+
+    ItemInitDefaults();
+    wchar_t err[512] = {0};
+    if (!InstallService(err, 512))
+        MessageBoxW(NULL, err, L"背景服務安裝失敗", MB_ICONWARNING);
 
     DialogBoxParamW(inst, MAKEINTRESOURCEW(IDD_MAIN), NULL, MainDlgProc, 0);
     if (mtx) CloseHandle(mtx);
