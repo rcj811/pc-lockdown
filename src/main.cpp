@@ -10,7 +10,7 @@
 #include "usb.h"
 #include "sha256.h"
 
-#define APP_VERSION L"0.1.0"
+#define APP_VERSION L"0.2.0"
 static const wchar_t* kAppKey = L"SOFTWARE\\PcLockdown";
 static const wchar_t* kAppTitle = L"PC Lockdown 電腦權限管理 v" APP_VERSION;
 
@@ -175,17 +175,10 @@ static bool IsAdmin() {
 
 // ───────── 主視窗 ─────────
 
-static void RefreshUsb(HWND dlg) {
-    bool installed = false;
-    UsbMode m = UsbGetMode(&installed);
-    CheckRadioButton(dlg, IDC_USB_ALLOW, IDC_USB_BLOCK,
-                     m == USB_BLOCK ? IDC_USB_BLOCK : m == USB_READONLY ? IDC_USB_RO : IDC_USB_ALLOW);
-    const wchar_t* s =
-        !installed        ? L"目前狀態：開放（這台電腦還沒插過 USB 隨身碟）" :
-        m == USB_BLOCK    ? L"目前狀態：● 已停用" :
-        m == USB_READONLY ? L"目前狀態：● 唯讀" :
-                            L"目前狀態：○ 開放";
-    SetDlgItemTextW(dlg, IDC_USB_STATUS, s);
+// 開關按鈕：按下 = 開（可以使用），彈起 = 關（不能使用）
+static void ShowToggle(HWND dlg, int id, bool on) {
+    CheckDlgButton(dlg, id, on ? BST_CHECKED : BST_UNCHECKED);
+    SetDlgItemTextW(dlg, id, on ? L"開" : L"關");
 }
 
 static INT_PTR CALLBACK MainDlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
@@ -193,21 +186,13 @@ static INT_PTR CALLBACK MainDlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_INITDIALOG: {
         SetWindowTextW(dlg, kAppTitle);
-        SetDlgItemTextW(dlg, IDC_GRP_USB, L" USB 儲存裝置（隨身碟、外接硬碟） ");
-        SetDlgItemTextW(dlg, IDC_USB_ALLOW, L"開放：可以讀取和寫入");
-        SetDlgItemTextW(dlg, IDC_USB_RO, L"唯讀：只能讀取，不能把檔案存進去");
-        SetDlgItemTextW(dlg, IDC_USB_BLOCK, L"停用：完全不能使用");
-        SetDlgItemTextW(dlg, IDC_NOTE,
-            L"說明：USB 鍵盤、滑鼠、印表機不受影響。\r\n"
-            L"套用後，已經插著的裝置要拔掉再重新插入才會生效。\r\n"
-            L"本測試版只有 USB 開關，其他功能會在後續版本加入。");
-        SetDlgItemTextW(dlg, IDC_APPLY, L"套用");
+        SetDlgItemTextW(dlg, IDC_USB_LABEL, L"USB 隨身碟");
         SetDlgItemTextW(dlg, IDC_CHPWD, L"變更密碼");
         SetDlgItemTextW(dlg, IDCANCEL, L"結束");
         wchar_t os[200];
         GetOsText(os, 200);
         SetDlgItemTextW(dlg, IDC_SYSINFO, os);
-        RefreshUsb(dlg);
+        ShowToggle(dlg, IDC_USB_TOGGLE, UsbIsEnabled(NULL));
         HICON ic = LoadIconW(NULL, MAKEINTRESOURCEW(32518));  // IDI_SHIELD，XP 沒有時回傳 NULL
         if (!ic) ic = LoadIconW(NULL, IDI_APPLICATION);
         SendMessageW(dlg, WM_SETICON, ICON_BIG, (LPARAM)ic);
@@ -216,24 +201,16 @@ static INT_PTR CALLBACK MainDlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_COMMAND:
         switch (LOWORD(wp)) {
-        case IDC_APPLY: {
-            UsbMode m = IsDlgButtonChecked(dlg, IDC_USB_BLOCK) ? USB_BLOCK :
-                        IsDlgButtonChecked(dlg, IDC_USB_RO) ? USB_READONLY : USB_ALLOW;
+        case IDC_USB_TOGGLE: {
+            bool on = IsDlgButtonChecked(dlg, IDC_USB_TOGGLE) == BST_CHECKED;
             bool installed = false;
-            UsbGetMode(&installed);
-            if (!UsbSetMode(m)) {
-                MessageBoxW(dlg, L"套用失敗：無法寫入登錄機碼。\r\n請確認是用系統管理員身分執行。",
-                            kAppTitle, MB_ICONERROR);
-            } else if (m == USB_BLOCK && !installed) {
-                MessageBoxW(dlg,
-                    L"這台電腦還沒安裝過 USB 隨身碟驅動程式，所以目前無法停用。\r\n\r\n"
-                    L"請先插入任何一支隨身碟一次（讓 Windows 安裝驅動程式），拔掉後再回來按「套用」。",
-                    kAppTitle, MB_ICONWARNING);
-            } else {
-                MessageBoxW(dlg, L"已套用。\r\n\r\n已經插著的 USB 裝置，請拔掉再重新插入才會生效。",
-                            kAppTitle, MB_ICONINFORMATION);
+            UsbIsEnabled(&installed);
+            if (!on && !installed) {
+                MessageBoxW(dlg, L"這台電腦還沒插過隨身碟，請先插一次再關閉。", kAppTitle, MB_ICONWARNING);
+            } else if (!UsbSetEnabled(on)) {
+                MessageBoxW(dlg, L"設定失敗，請用系統管理員身分執行。", kAppTitle, MB_ICONERROR);
             }
-            RefreshUsb(dlg);
+            ShowToggle(dlg, IDC_USB_TOGGLE, UsbIsEnabled(NULL));
             return TRUE;
         }
         case IDC_CHPWD:

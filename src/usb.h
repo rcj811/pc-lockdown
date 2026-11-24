@@ -1,8 +1,6 @@
 #pragma once
 
-enum UsbMode { USB_ALLOW = 0, USB_READONLY = 1, USB_BLOCK = 2, USB_UNKNOWN = -1 };
-
-// 讀取目前 USB 儲存裝置狀態
-UsbMode UsbGetMode(bool* driverInstalled);
-// 套用 USB 模式，失敗回傳 false
-bool UsbSetMode(UsbMode mode);
+// USB 儲存裝置是否允許使用；driverInstalled 回傳這台電腦是否裝過隨身碟驅動程式
+bool UsbIsEnabled(bool* driverInstalled);
+// 開 = 允許使用，關 = 停用。失敗回傳 false
+bool UsbSetEnabled(bool on);

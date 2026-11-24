@@ -3,14 +3,10 @@
 #define IDD_MAIN         100
 #define IDD_PWD          101
 
-#define IDC_GRP_USB      1001
-#define IDC_USB_ALLOW    1002
-#define IDC_USB_RO       1003
-#define IDC_USB_BLOCK    1004
-#define IDC_USB_STATUS   1005
+// 主視窗：每一項 = 名稱 + 開關按鈕
+#define IDC_USB_LABEL    1001
+#define IDC_USB_TOGGLE   1002
 #define IDC_SYSINFO      1006
-#define IDC_NOTE         1007
-#define IDC_APPLY        1008
 #define IDC_CHPWD        1009
 
 #define IDC_PWD_LABEL1   1101
