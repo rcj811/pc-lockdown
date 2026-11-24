@@ -8,17 +8,21 @@
 static SERVICE_STATUS_HANDLE gStatusHandle;
 static SERVICE_STATUS gStatus;
 static HANDLE gStopEvent;
+static volatile LONG gResumed = 0;
 
 static void ReportStatus(DWORD state) {
     gStatus.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
     gStatus.dwCurrentState = state;
-    gStatus.dwControlsAccepted = (state == SERVICE_RUNNING) ? SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN : 0;
+    gStatus.dwControlsAccepted = (state == SERVICE_RUNNING) ? SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN | SERVICE_ACCEPT_POWEREVENT : 0;
     gStatus.dwWin32ExitCode = NO_ERROR;
     gStatus.dwWaitHint = 10000;
     SetServiceStatus(gStatusHandle, &gStatus);
 }
 
-static DWORD WINAPI CtrlHandler(DWORD ctrl, DWORD, LPVOID, LPVOID) {
+static DWORD WINAPI CtrlHandler(DWORD ctrl, DWORD evt, LPVOID, LPVOID) {
+    // 從睡眠／休眠醒來：通知時間看守以目前時間重新計算
+    if (ctrl == SERVICE_CONTROL_POWEREVENT && (evt == 0x7 /*PBT_APMRESUMESUSPEND*/ || evt == 0x12 /*PBT_APMRESUMEAUTOMATIC*/))
+        InterlockedExchange(&gResumed, 1);
     if (ctrl == SERVICE_CONTROL_STOP || ctrl == SERVICE_CONTROL_SHUTDOWN) {
         ReportStatus(SERVICE_STOP_PENDING);
         SetEvent(gStopEvent);
@@ -26,15 +30,22 @@ static DWORD WINAPI CtrlHandler(DWORD ctrl, DWORD, LPVOID, LPVOID) {
     return NO_ERROR;
 }
 
+static DWORD WINAPI TimeGuardThread(LPVOID) {
+    TimeGuardLoop(gStopEvent, &gResumed);
+    return 0;
+}
+
 static void WINAPI ServiceMain(DWORD, LPWSTR*) {
     gStatusHandle = RegisterServiceCtrlHandlerExW(SERVICE_NAME, CtrlHandler, NULL);
     if (!gStatusHandle) return;
     gStopEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
     ReportStatus(SERVICE_RUNNING);
+    HANDLE timeThread = CreateThread(NULL, 0, TimeGuardThread, NULL, 0, NULL);
     // 每 5 秒檢查一次：設定為「關」的項目被改掉就改回來
     do {
         ItemEnforceAll();
     } while (WaitForSingleObject(gStopEvent, 5000) == WAIT_TIMEOUT);
+    if (timeThread) { WaitForSingleObject(timeThread, 5000); CloseHandle(timeThread); }
     ReportStatus(SERVICE_STOPPED);
 }
 

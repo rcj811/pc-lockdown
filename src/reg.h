@@ -11,6 +11,9 @@ bool RegWriteString(HKEY root, const wchar_t* path, const wchar_t* name, const w
 bool RegWriteExpandString(HKEY root, const wchar_t* path, const wchar_t* name, const wchar_t* value);
 // value 為以兩個 \0 結尾的多字串
 bool RegWriteMultiSz(HKEY root, const wchar_t* path, const wchar_t* name, const wchar_t* value);
+bool RegWriteBinary(HKEY root, const wchar_t* path, const wchar_t* name, const void* data, DWORD size);
+// 讀取 REG_BINARY，大小必須剛好等於 size
+bool RegReadBinary(HKEY root, const wchar_t* path, const wchar_t* name, void* data, DWORD size);
 bool RegWriteQword(HKEY root, const wchar_t* path, const wchar_t* name, ULONGLONG value);
 bool RegDeleteValueAt(HKEY root, const wchar_t* path, const wchar_t* name);
 // 遞迴刪除整個機碼

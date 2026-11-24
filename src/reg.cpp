@@ -28,6 +28,19 @@ bool RegWriteDword(HKEY root, const wchar_t* path, const wchar_t* name, DWORD va
     return WriteRaw(root, path, name, REG_DWORD, &value, sizeof(DWORD));
 }
 
+bool RegWriteBinary(HKEY root, const wchar_t* path, const wchar_t* name, const void* data, DWORD size) {
+    return WriteRaw(root, path, name, REG_BINARY, data, size);
+}
+
+bool RegReadBinary(HKEY root, const wchar_t* path, const wchar_t* name, void* data, DWORD size) {
+    HKEY k;
+    if (RegOpenKeyExW(root, path, 0, KEY_READ | KEY_WOW64_64KEY, &k) != ERROR_SUCCESS) return false;
+    DWORD type = 0, got = size;
+    LONG r = RegQueryValueExW(k, name, NULL, &type, (BYTE*)data, &got);
+    RegCloseKey(k);
+    return r == ERROR_SUCCESS && type == REG_BINARY && got == size;
+}
+
 bool RegWriteQword(HKEY root, const wchar_t* path, const wchar_t* name, ULONGLONG value) {
     return WriteRaw(root, path, name, REG_QWORD, &value, sizeof(ULONGLONG));
 }

@@ -13,7 +13,7 @@ const ItemInfo kItems[ITEM_COUNT] = {
     { L"USB 隨身碟 / 手機",  L"USB",      L"已經插著的裝置，拔掉重插後生效。", NULL },
     { L"光碟機",             L"CDROM",    L"重新開機後生效。", L"重新開機後生效。" },
     { L"安裝軟體",           L"Install",  L"使用者登出再登入後完全生效。", L"使用者登出再登入後完全生效。" },
-    { L"調整時間",           L"Time",     L"使用者登出再登入後生效。", L"使用者登出再登入後生效。" },
+    { L"調整時間",           L"Time",     NULL, NULL },
     { L"上網（內網照常）",   L"Internet", NULL, NULL },
     { L"工作管理員",         L"TaskMgr",  NULL, NULL },
     { L"登錄編輯器",         L"Regedit",  NULL, NULL },
@@ -160,8 +160,11 @@ static bool InstallApply(bool allow) {
 }
 
 // ═════════ 4. 調整時間 ═════════
-// 從 Administrators / Power Users / Users 移除「變更系統時間」權限（XP~Win11）
-// Vista 以後再移除「變更時區」權限。LOCAL SERVICE 保留，自動校時照常運作
+// 由背景服務（SYSTEM 身分）看守時間：每秒比對「應該的時間」，
+// 被改掉就立刻改回來，時區也一樣。不管使用者有沒有權限都無效，關閉後立即生效。
+// 正常的時鐘誤差（每秒幾毫秒）會跟著走，不會被當成被改。
+
+// v1.0 曾移除過管理員的改時間權限，打開時還原成 Windows 預設值
 static PSID MakeSid(DWORD rid) {
     SID_IDENTIFIER_AUTHORITY nt = SECURITY_NT_AUTHORITY;
     PSID sid = NULL;
@@ -173,13 +176,6 @@ static void InitLsaString(LSA_UNICODE_STRING* s, const wchar_t* text) {
     s->Buffer = (PWSTR)text;
     s->Length = (USHORT)(lstrlenW(text) * sizeof(wchar_t));
     s->MaximumLength = s->Length + sizeof(wchar_t);
-}
-
-static LSA_HANDLE OpenLsa() {
-    LSA_OBJECT_ATTRIBUTES oa; ZeroMemory(&oa, sizeof(oa));
-    LSA_HANDLE h = NULL;
-    if (LsaOpenPolicy(NULL, &oa, POLICY_LOOKUP_NAMES | POLICY_CREATE_ACCOUNT, &h) != 0) return NULL;
-    return h;
 }
 
 static bool SidHasRight(LSA_HANDLE lsa, PSID sid, const wchar_t* right) {
@@ -195,53 +191,140 @@ static bool SidHasRight(LSA_HANDLE lsa, PSID sid, const wchar_t* right) {
     return found;
 }
 
-static void SetRight(LSA_HANDLE lsa, PSID sid, const wchar_t* right, bool grant) {
-    if (!sid) return;
-    LSA_UNICODE_STRING s; InitLsaString(&s, right);
-    if (grant) LsaAddAccountRights(lsa, sid, &s, 1);
-    else       LsaRemoveAccountRights(lsa, sid, FALSE, &s, 1);
-}
-
-static bool TimeIsBlocked() {
-    LSA_HANDLE lsa = OpenLsa();
-    if (!lsa) return false;
+static void RestoreTimePrivileges() {
+    LSA_OBJECT_ATTRIBUTES oa; ZeroMemory(&oa, sizeof(oa));
+    LSA_HANDLE lsa = NULL;
+    if (LsaOpenPolicy(NULL, &oa, POLICY_LOOKUP_NAMES | POLICY_CREATE_ACCOUNT, &lsa) != 0) return;
     PSID admins = MakeSid(DOMAIN_ALIAS_RID_ADMINS);
-    bool has = admins && SidHasRight(lsa, admins, L"SeSystemtimePrivilege");
+    if (admins && !SidHasRight(lsa, admins, L"SeSystemtimePrivilege")) {
+        LSA_UNICODE_STRING s;
+        InitLsaString(&s, L"SeSystemtimePrivilege");
+        LsaAddAccountRights(lsa, admins, &s, 1);
+        if (IsWindowsXP()) {
+            PSID power = MakeSid(DOMAIN_ALIAS_RID_POWER_USERS);
+            if (power) { LsaAddAccountRights(lsa, power, &s, 1); FreeSid(power); }
+        } else {
+            InitLsaString(&s, L"SeTimeZonePrivilege");
+            LsaAddAccountRights(lsa, admins, &s, 1);
+            PSID users = MakeSid(DOMAIN_ALIAS_RID_USERS);
+            if (users) { LsaAddAccountRights(lsa, users, &s, 1); FreeSid(users); }
+        }
+    }
     if (admins) FreeSid(admins);
     LsaClose(lsa);
-    return !has;
 }
 
 static bool TimeApply(bool allow) {
-    LSA_HANDLE lsa = OpenLsa();
-    if (!lsa) return false;
-    PSID admins = MakeSid(DOMAIN_ALIAS_RID_ADMINS);
-    PSID power  = MakeSid(DOMAIN_ALIAS_RID_POWER_USERS);
-    PSID users  = MakeSid(DOMAIN_ALIAS_RID_USERS);
-    bool xp = IsWindowsXP();
     if (allow) {
-        // 還原成 Windows 預設值
-        SetRight(lsa, admins, L"SeSystemtimePrivilege", true);
-        if (xp) SetRight(lsa, power, L"SeSystemtimePrivilege", true);
-        if (!xp) {
-            SetRight(lsa, admins, L"SeTimeZonePrivilege", true);
-            SetRight(lsa, users, L"SeTimeZonePrivilege", true);
+        RestoreTimePrivileges();
+        RegDeleteValueAt(HKEY_LOCAL_MACHINE, kAppKey, L"SavedTimeZone");
+        return true;
+    }
+    // 記住關閉當下的時區，之後被改就改回來
+    TIME_ZONE_INFORMATION tz;
+    if (!RegReadBinary(HKEY_LOCAL_MACHINE, kAppKey, L"SavedTimeZone", &tz, sizeof(tz))) {
+        GetTimeZoneInformation(&tz);
+        RegWriteBinary(HKEY_LOCAL_MACHINE, kAppKey, L"SavedTimeZone", &tz, sizeof(tz));
+    }
+    return true;
+}
+
+// 連打開都不行：封鎖「日期和時間」控制台與 Win10/11 設定頁
+//   DisallowCpl：XP 用檔名 timedate.cpl，Vista 以後用 Microsoft.DateAndTime（兩個都寫）
+//   SettingsPageVisibility：Win10 1703 以後隱藏設定 App 的日期時間頁
+static const wchar_t* kExplorerPol = L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer";
+static const wchar_t* kDisallowCpl = L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer\\DisallowCpl";
+static const wchar_t* kHideSettings = L"hide:dateandtime;regionformatting";
+
+static bool HasOtherValues(HKEY root, const wchar_t* path) {
+    HKEY k;
+    if (RegOpenKeyExW(root, path, 0, KEY_READ, &k) != ERROR_SUCCESS) return false;
+    DWORD n = 0;
+    RegQueryInfoKeyW(k, NULL, NULL, NULL, NULL, NULL, NULL, &n, NULL, NULL, NULL, NULL);
+    RegCloseKey(k);
+    return n > 0;
+}
+
+static void TimeHideHiveFn(HKEY root, void* p) {
+    bool allow = *(bool*)p;
+    wchar_t v[64];
+    if (allow) {
+        RegDeleteValueAt(root, kDisallowCpl, L"PcLockdown1");
+        RegDeleteValueAt(root, kDisallowCpl, L"PcLockdown2");
+        if (!HasOtherValues(root, kDisallowCpl)) RegDeleteValueAt(root, kExplorerPol, L"DisallowCpl");
+        if (root == HKEY_LOCAL_MACHINE && RegReadString(root, kExplorerPol, L"SettingsPageVisibility", v, 64) &&
+            lstrcmpW(v, kHideSettings) == 0)
+            RegDeleteValueAt(root, kExplorerPol, L"SettingsPageVisibility");
+        return;
+    }
+    DWORD d = 0;
+    if (!(RegReadDword(root, kExplorerPol, L"DisallowCpl", &d) && d == 1))
+        RegWriteDword(root, kExplorerPol, L"DisallowCpl", 1);
+    if (!(RegReadString(root, kDisallowCpl, L"PcLockdown1", v, 64) && lstrcmpW(v, L"timedate.cpl") == 0))
+        RegWriteString(root, kDisallowCpl, L"PcLockdown1", L"timedate.cpl");
+    if (!(RegReadString(root, kDisallowCpl, L"PcLockdown2", v, 64) && lstrcmpW(v, L"Microsoft.DateAndTime") == 0))
+        RegWriteString(root, kDisallowCpl, L"PcLockdown2", L"Microsoft.DateAndTime");
+    if (root == HKEY_LOCAL_MACHINE && !IsWindowsXP() &&
+        !RegReadString(root, kExplorerPol, L"SettingsPageVisibility", v, 64))
+        RegWriteString(root, kExplorerPol, L"SettingsPageVisibility", kHideSettings);
+}
+
+static void TimeHideApply(bool allow, bool loadUnloaded) {
+    ForEachUserHive(loadUnloaded, TimeHideHiveFn, &allow);
+}
+
+static ULONGLONG NowUtc() {
+    FILETIME ft; GetSystemTimeAsFileTime(&ft);
+    return ((ULONGLONG)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+}
+
+static bool SameTimeZone(const TIME_ZONE_INFORMATION* a, const TIME_ZONE_INFORMATION* b) {
+    return a->Bias == b->Bias && a->StandardBias == b->StandardBias && a->DaylightBias == b->DaylightBias &&
+           wcsncmp(a->StandardName, b->StandardName, 32) == 0;
+}
+
+void TimeGuardLoop(HANDLE stopEvent, volatile LONG* resumed) {
+    EnablePrivilege(L"SeSystemtimePrivilege");
+    EnablePrivilege(L"SeTimeZonePrivilege");
+    bool haveBase = false;
+    ULONGLONG baseTime = 0;
+    DWORD baseTick = 0;
+    const LONGLONG kTolerance = 2LL * 10000000;  // 2 秒（單位 100 奈秒）
+
+    while (WaitForSingleObject(stopEvent, 1000) == WAIT_TIMEOUT) {
+        if (ItemGetAllowed(ITEM_TIME)) { haveBase = false; continue; }
+
+        ULONGLONG now = NowUtc();
+        DWORD tick = GetTickCount();
+        // 剛關閉、或電腦剛從睡眠／休眠醒來：以目前時間為準
+        if (!haveBase || InterlockedExchange(resumed, 0)) {
+            baseTime = now; baseTick = tick; haveBase = true;
+            TimeApply(false);
+            continue;
         }
-    } else {
-        PSID all[3] = { admins, power, users };
-        for (int i = 0; i < 3; i++) {
-            if (all[i] && SidHasRight(lsa, all[i], L"SeSystemtimePrivilege"))
-                SetRight(lsa, all[i], L"SeSystemtimePrivilege", false);
-            if (!xp && all[i] && SidHasRight(lsa, all[i], L"SeTimeZonePrivilege"))
-                SetRight(lsa, all[i], L"SeTimeZonePrivilege", false);
+
+        ULONGLONG expected = baseTime + (ULONGLONG)(DWORD)(tick - baseTick) * 10000;
+        LONGLONG diff = (LONGLONG)(now - expected);
+        if (diff > kTolerance || diff < -kTolerance) {
+            // 可能是剛醒來、電源事件還沒送到：等一下再確認
+            if (WaitForSingleObject(stopEvent, 1500) != WAIT_TIMEOUT) break;
+            if (InterlockedExchange(resumed, 0)) { haveBase = false; continue; }
+            if (ItemGetAllowed(ITEM_TIME)) { haveBase = false; continue; }
+            expected = baseTime + (ULONGLONG)(DWORD)(GetTickCount() - baseTick) * 10000;
+            FILETIME ft; ft.dwLowDateTime = (DWORD)expected; ft.dwHighDateTime = (DWORD)(expected >> 32);
+            SYSTEMTIME st;
+            if (FileTimeToSystemTime(&ft, &st)) SetSystemTime(&st);
+            now = NowUtc();
+        }
+        // 跟著正常的時鐘誤差走
+        baseTime = now; baseTick = GetTickCount();
+
+        TIME_ZONE_INFORMATION saved, cur;
+        if (RegReadBinary(HKEY_LOCAL_MACHINE, kAppKey, L"SavedTimeZone", &saved, sizeof(saved))) {
+            GetTimeZoneInformation(&cur);
+            if (!SameTimeZone(&saved, &cur)) SetTimeZoneInformation(&saved);
         }
     }
-    bool ok = admins && (SidHasRight(lsa, admins, L"SeSystemtimePrivilege") == allow);
-    if (admins) FreeSid(admins);
-    if (power) FreeSid(power);
-    if (users) FreeSid(users);
-    LsaClose(lsa);
-    return ok;
 }
 
 // ═════════ 5. 上網（內網照常） ═════════
@@ -393,7 +476,7 @@ static bool ApplyItem(int id, bool allow, bool full) {
     case ITEM_USB:      return UsbApply(allow);
     case ITEM_CDROM:    return CdromApply(allow);
     case ITEM_INSTALL:  return InstallApply(allow);
-    case ITEM_TIME:     return TimeApply(allow);
+    case ITEM_TIME:     TimeHideApply(allow, full); return TimeApply(allow);
     case ITEM_INTERNET: return InternetApply(allow);
     case ITEM_TASKMGR:  return PolicyApply(&kPolTaskMgr, allow, full);
     case ITEM_REGEDIT:  return PolicyApply(&kPolRegedit, allow, full);
@@ -413,6 +496,9 @@ bool ItemSet(int id, bool allow) {
     // 先寫設定再套用：背景服務只會強制「關」的項目，不會跟這裡互相打架
     if (!RegWriteDword(HKEY_LOCAL_MACHINE, kStateKey, kItems[id].key, allow ? 1 : 0)) return false;
     bool ok = ApplyItem(id, allow, true);
+    // 通知桌面（Explorer）重新讀取原則，盡量不用登出就生效
+    DWORD_PTR r;
+    SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM)L"Policy", SMTO_ABORTIFHUNG, 2000, &r);
     if (!ok) RegWriteDword(HKEY_LOCAL_MACHINE, kStateKey, kItems[id].key, allow ? 0 : 1);
     return ok;
 }
@@ -439,7 +525,7 @@ void ItemInitDefaults() {
     RegWriteDword(HKEY_LOCAL_MACHINE, kStateKey, kItems[ITEM_USB].key, UsbIsBlocked() ? 0 : 1);
     RegWriteDword(HKEY_LOCAL_MACHINE, kStateKey, kItems[ITEM_CDROM].key, CdromIsBlocked() ? 0 : 1);
     RegWriteDword(HKEY_LOCAL_MACHINE, kStateKey, kItems[ITEM_INSTALL].key, InstallIsBlocked() ? 0 : 1);
-    RegWriteDword(HKEY_LOCAL_MACHINE, kStateKey, kItems[ITEM_TIME].key, TimeIsBlocked() ? 0 : 1);
+    RegWriteDword(HKEY_LOCAL_MACHINE, kStateKey, kItems[ITEM_TIME].key, 1);
     RegWriteDword(HKEY_LOCAL_MACHINE, kStateKey, kItems[ITEM_INTERNET].key,
                   (!IsWindowsXP() && FwRuleExists()) ? 0 : 1);
     for (int id = ITEM_TASKMGR; id < ITEM_COUNT; id++)

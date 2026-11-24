@@ -32,5 +32,8 @@ bool ItemSet(int id, bool allow);
 void ItemEnforceAll();
 // 第一次執行時，依系統目前狀態建立初始設定
 void ItemInitDefaults();
+// 背景服務的時間看守執行緒：每秒檢查，被改就改回來
+// resumed 由服務的電源事件設為 1（剛從睡眠醒來）
+void TimeGuardLoop(void* stopEvent, volatile long* resumed);
 // 全部恢復為「開」（解除安裝用）
 void ItemAllowAll();

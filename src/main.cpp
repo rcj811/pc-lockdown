@@ -12,7 +12,7 @@
 #include "service.h"
 #include "sha256.h"
 
-#define APP_VERSION L"1.0.0"
+#define APP_VERSION L"1.1.0"
 static const wchar_t* kAppTitle = L"PC Lockdown 電腦權限管理 v" APP_VERSION;
 
 // ───────── 密碼 ─────────
