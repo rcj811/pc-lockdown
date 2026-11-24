@@ -1,6 +1,9 @@
 #include <windows.h>
 #include <ntsecapi.h>
 #include <iphlpapi.h>
+#include <aclapi.h>
+#include <sddl.h>
+#include <tlhelp32.h>
 #include <stdio.h>
 #include "items.h"
 #include "reg.h"
@@ -234,7 +237,6 @@ static bool TimeApply(bool allow) {
 //   SettingsPageVisibility：Win10 1703 以後隱藏設定 App 的日期時間頁
 static const wchar_t* kExplorerPol = L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer";
 static const wchar_t* kDisallowCpl = L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer\\DisallowCpl";
-static const wchar_t* kHideSettings = L"hide:dateandtime;regionformatting";
 
 static bool HasOtherValues(HKEY root, const wchar_t* path) {
     HKEY k;
@@ -252,9 +254,6 @@ static void TimeHideHiveFn(HKEY root, void* p) {
         RegDeleteValueAt(root, kDisallowCpl, L"PcLockdown1");
         RegDeleteValueAt(root, kDisallowCpl, L"PcLockdown2");
         if (!HasOtherValues(root, kDisallowCpl)) RegDeleteValueAt(root, kExplorerPol, L"DisallowCpl");
-        if (root == HKEY_LOCAL_MACHINE && RegReadString(root, kExplorerPol, L"SettingsPageVisibility", v, 64) &&
-            lstrcmpW(v, kHideSettings) == 0)
-            RegDeleteValueAt(root, kExplorerPol, L"SettingsPageVisibility");
         return;
     }
     DWORD d = 0;
@@ -264,13 +263,164 @@ static void TimeHideHiveFn(HKEY root, void* p) {
         RegWriteString(root, kDisallowCpl, L"PcLockdown1", L"timedate.cpl");
     if (!(RegReadString(root, kDisallowCpl, L"PcLockdown2", v, 64) && lstrcmpW(v, L"Microsoft.DateAndTime") == 0))
         RegWriteString(root, kDisallowCpl, L"PcLockdown2", L"Microsoft.DateAndTime");
-    if (root == HKEY_LOCAL_MACHINE && !IsWindowsXP() &&
-        !RegReadString(root, kExplorerPol, L"SettingsPageVisibility", v, 64))
-        RegWriteString(root, kExplorerPol, L"SettingsPageVisibility", kHideSettings);
+}
+
+// ── Win10/11 設定 App：隱藏「日期和時間」頁（強制寫入，原本的值會先保存） ──
+static const wchar_t* kHidePages = L"dateandtime;regionformatting";
+
+static void SettingsPageApply(bool allow) {
+    if (IsWindowsXP()) return;
+    wchar_t cur[1024] = {0}, saved[1024] = {0}, want[1100];
+    bool hasCur = RegReadString(HKEY_LOCAL_MACHINE, kExplorerPol, L"SettingsPageVisibility", cur, 1024);
+    bool hasSaved = RegReadString(HKEY_LOCAL_MACHINE, kAppKey, L"SavedSettingsPage", saved, 1024);
+    if (allow) {
+        if (hasSaved) {
+            if (saved[0]) RegWriteString(HKEY_LOCAL_MACHINE, kExplorerPol, L"SettingsPageVisibility", saved);
+            else RegDeleteValueAt(HKEY_LOCAL_MACHINE, kExplorerPol, L"SettingsPageVisibility");
+            RegDeleteValueAt(HKEY_LOCAL_MACHINE, kAppKey, L"SavedSettingsPage");
+        }
+        return;
+    }
+    if (!hasSaved) {
+        // 第一次關閉：保存原本的值（沒有就存空字串）
+        lstrcpynW(saved, hasCur ? cur : L"", 1024);
+        RegWriteString(HKEY_LOCAL_MACHINE, kAppKey, L"SavedSettingsPage", saved);
+    }
+    if (wcsncmp(saved, L"hide:", 5) == 0 && wcsstr(saved, L"dateandtime") == NULL)
+        _snwprintf(want, 1099, L"%ls;%ls", saved, kHidePages);
+    else if (wcsncmp(saved, L"hide:", 5) == 0)
+        lstrcpynW(want, saved, 1100);
+    else
+        _snwprintf(want, 1099, L"hide:%ls", kHidePages);
+    want[1099] = 0;
+    if (!hasCur || lstrcmpW(cur, want) != 0)
+        RegWriteString(HKEY_LOCAL_MACHINE, kExplorerPol, L"SettingsPageVisibility", want);
+}
+
+// 關掉已經開著的「設定」視窗，下次開啟才會套用隱藏頁面
+static void CloseSettingsApp() {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return;
+    PROCESSENTRY32W pe; pe.dwSize = sizeof(pe);
+    for (BOOL ok = Process32FirstW(snap, &pe); ok; ok = Process32NextW(snap, &pe)) {
+        if (lstrcmpiW(pe.szExeFile, L"SystemSettings.exe") == 0 || lstrcmpiW(pe.szExeFile, L"timedate.cpl") == 0) {
+            HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, pe.th32ProcessID);
+            if (h) { TerminateProcess(h, 0); CloseHandle(h); }
+        }
+    }
+    CloseHandle(snap);
+}
+
+// ── timedate.cpl 檔案權限：所有人（含管理員）都不能執行 ──
+// XP 雙擊時鐘、Win7「變更日期和時間設定」、執行 timedate.cpl 都會打不開
+// 原本的權限存在登錄檔，打開時原封不動還原
+static const wchar_t* kCplLockSddl = L"D:P(D;;0x21;;;WD)(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;BU)";
+
+static int CplPaths(wchar_t paths[2][MAX_PATH]) {
+    int n = 0;
+    if (IsWow64()) {  // 32 位元程式在 64 位元 Windows：System32 要用 Sysnative 才看得到
+        ExpandEnvironmentStringsW(L"%SystemRoot%\\Sysnative\\timedate.cpl", paths[n++], MAX_PATH);
+        ExpandEnvironmentStringsW(L"%SystemRoot%\\SysWOW64\\timedate.cpl", paths[n++], MAX_PATH);
+    } else {
+        ExpandEnvironmentStringsW(L"%SystemRoot%\\System32\\timedate.cpl", paths[n++], MAX_PATH);
+    }
+    return n;
+}
+
+static bool CplIsLocked(const wchar_t* path) {
+    HANDLE h = CreateFileW(path, FILE_READ_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           NULL, OPEN_EXISTING, 0, NULL);
+    if (h != INVALID_HANDLE_VALUE) { CloseHandle(h); return false; }
+    return GetLastError() == ERROR_ACCESS_DENIED;
+}
+
+static PSID AdminsSid() {
+    SID_IDENTIFIER_AUTHORITY nt = SECURITY_NT_AUTHORITY;
+    PSID sid = NULL;
+    AllocateAndInitializeSid(&nt, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &sid);
+    return sid;
+}
+
+static void CplLock(const wchar_t* path, int idx) {
+    if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES || CplIsLocked(path)) return;
+    EnablePrivilege(L"SeTakeOwnershipPrivilege");
+    EnablePrivilege(L"SeRestorePrivilege");
+    wchar_t name[32];
+    _snwprintf(name, 31, L"SavedCplAcl%d", idx); name[31] = 0;
+    static wchar_t tmp[4096];
+    // 保存原本的擁有者、群組、權限（只保存第一次的）
+    if (!RegReadString(HKEY_LOCAL_MACHINE, kAppKey, name, tmp, 4096)) {
+        PSECURITY_DESCRIPTOR sd = NULL;
+        if (GetNamedSecurityInfoW((LPWSTR)path, SE_FILE_OBJECT,
+                OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                NULL, NULL, NULL, NULL, &sd) == ERROR_SUCCESS) {
+            LPWSTR str = NULL;
+            if (ConvertSecurityDescriptorToStringSecurityDescriptorW(sd, SDDL_REVISION_1,
+                    OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, &str, NULL)) {
+                RegWriteString(HKEY_LOCAL_MACHINE, kAppKey, name, str);
+                LocalFree(str);
+            }
+            LocalFree(sd);
+        }
+    }
+    // 先把擁有者改成 Administrators（Vista 以後原本是 TrustedInstaller），再設定權限
+    PSID admins = AdminsSid();
+    if (admins) {
+        SetNamedSecurityInfoW((LPWSTR)path, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION, admins, NULL, NULL, NULL);
+        FreeSid(admins);
+    }
+    PSECURITY_DESCRIPTOR lockSd = NULL;
+    if (ConvertStringSecurityDescriptorToSecurityDescriptorW(kCplLockSddl, SDDL_REVISION_1, &lockSd, NULL)) {
+        BOOL present = FALSE, def = FALSE; PACL dacl = NULL;
+        GetSecurityDescriptorDacl(lockSd, &present, &dacl, &def);
+        SetNamedSecurityInfoW((LPWSTR)path, SE_FILE_OBJECT,
+                              DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, NULL, NULL, dacl, NULL);
+        LocalFree(lockSd);
+    }
+}
+
+static void CplUnlock(const wchar_t* path, int idx) {
+    wchar_t name[32];
+    _snwprintf(name, 31, L"SavedCplAcl%d", idx); name[31] = 0;
+    wchar_t sddl[4096];
+    if (!RegReadString(HKEY_LOCAL_MACHINE, kAppKey, name, sddl, 4096)) return;
+    EnablePrivilege(L"SeTakeOwnershipPrivilege");
+    EnablePrivilege(L"SeRestorePrivilege");
+    PSECURITY_DESCRIPTOR sd = NULL;
+    if (ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, &sd, NULL)) {
+        PSID owner = NULL, group = NULL; PACL dacl = NULL;
+        BOOL d1 = FALSE, present = FALSE;
+        GetSecurityDescriptorOwner(sd, &owner, &d1);
+        GetSecurityDescriptorGroup(sd, &group, &d1);
+        GetSecurityDescriptorDacl(sd, &present, &dacl, &d1);
+        SECURITY_DESCRIPTOR_CONTROL ctl = 0; DWORD rev = 0;
+        GetSecurityDescriptorControl(sd, &ctl, &rev);
+        SECURITY_INFORMATION si = DACL_SECURITY_INFORMATION |
+            ((ctl & SE_DACL_PROTECTED) ? PROTECTED_DACL_SECURITY_INFORMATION : UNPROTECTED_DACL_SECURITY_INFORMATION);
+        // 先還原權限（目前擁有者是 Administrators，可以修改），再還原擁有者
+        if (SetNamedSecurityInfoW((LPWSTR)path, SE_FILE_OBJECT, si, NULL, NULL, dacl, NULL) == ERROR_SUCCESS) {
+            SetNamedSecurityInfoW((LPWSTR)path, SE_FILE_OBJECT,
+                                  OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION, owner, group, NULL, NULL);
+            RegDeleteValueAt(HKEY_LOCAL_MACHINE, kAppKey, name);
+        }
+        LocalFree(sd);
+    }
+}
+
+static void CplApply(bool allow) {
+    wchar_t paths[2][MAX_PATH];
+    int n = CplPaths(paths);
+    for (int i = 0; i < n; i++) {
+        if (allow) CplUnlock(paths[i], i); else CplLock(paths[i], i);
+    }
 }
 
 static void TimeHideApply(bool allow, bool loadUnloaded) {
     ForEachUserHive(loadUnloaded, TimeHideHiveFn, &allow);
+    SettingsPageApply(allow);
+    CplApply(allow);
+    // 從 GUI 切換時（loadUnloaded = true）：關掉已開著的設定視窗
+    if (!allow && loadUnloaded) CloseSettingsApp();
 }
 
 static ULONGLONG NowUtc() {
