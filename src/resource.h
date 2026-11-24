@@ -9,6 +9,7 @@
 #define IDC_SYSINFO      1006
 #define IDC_CHPWD        1009
 #define IDC_UNINSTALL    1010
+#define IDC_EXITALL      1011
 
 #define IDC_PWD_LABEL1   1101
 #define IDC_PWD1         1102

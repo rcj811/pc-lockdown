@@ -5,6 +5,7 @@
 #include "items.h"
 #include "sys.h"
 #include "reg.h"
+#include "tray.h"
 
 static SERVICE_STATUS_HANDLE gStatusHandle;
 static SERVICE_STATUS gStatus;
@@ -141,6 +142,13 @@ bool InstallService(wchar_t* err, int cch) {
         }
     }
 
+    // 移除「從網際網路下載」標記（Zone.Identifier），否則 XP 每次啟動都跳「安全性警告」
+    wchar_t ads[MAX_PATH + 32];
+    _snwprintf(ads, MAX_PATH + 31, L"%ls:Zone.Identifier", target); ads[MAX_PATH + 31] = 0;
+    DeleteFileW(ads);
+    _snwprintf(ads, MAX_PATH + 31, L"%ls:Zone.Identifier", self); ads[MAX_PATH + 31] = 0;
+    DeleteFileW(ads);
+
     if (!svc) {
         svc = CreateServiceW(scm, SERVICE_NAME, L"PC Lockdown 防護服務", SERVICE_ALL_ACCESS,
                              SERVICE_WIN32_OWN_PROCESS, SERVICE_AUTO_START, SERVICE_ERROR_NORMAL,
@@ -193,12 +201,7 @@ void UninstallService() {
     ShortcutPath(lnk, MAX_PATH);
     DeleteFileW(lnk);
     RegDeleteValueAt(HKEY_LOCAL_MACHINE, kRunKey, L"PcLockdown");
-    // 關掉所有右下角圖示
-    HWND w;
-    while ((w = FindWindowW(L"PcLockdownTray", NULL)) != NULL) {
-        SendMessageTimeoutW(w, WM_CLOSE, 0, 0, SMTO_ABORTIFHUNG, 2000, NULL);
-        if (FindWindowW(L"PcLockdownTray", NULL) == w) break;
-    }
+    CloseTrayIcons();
     if (lstrcmpiW(self, target) == 0) {
         // 正在執行的就是安裝的那份：重新開機後刪除
         MoveFileExW(target, NULL, MOVEFILE_DELAY_UNTIL_REBOOT);
@@ -207,4 +210,20 @@ void UninstallService() {
         DeleteFileW(target);
         RemoveDirectoryW(dir);
     }
+}
+
+void StopProtection() {
+    SC_HANDLE scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_ALL_ACCESS);
+    if (scm) {
+        SC_HANDLE svc = OpenServiceW(scm, SERVICE_NAME, SERVICE_ALL_ACCESS);
+        if (svc) {
+            StopService(svc);
+            // 改成手動啟動：重新開機也不會自動執行，直到再次執行本程式
+            ChangeServiceConfigW(svc, SERVICE_NO_CHANGE, SERVICE_DEMAND_START, SERVICE_NO_CHANGE,
+                                 NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+            CloseServiceHandle(svc);
+        }
+        CloseServiceHandle(scm);
+    }
+    RegDeleteValueAt(HKEY_LOCAL_MACHINE, kRunKey, L"PcLockdown");
 }

@@ -11,10 +11,10 @@
 #include "items.h"
 #include "service.h"
 #include "tray.h"
+#include "app.h"
 #include "sha256.h"
 
-#define APP_VERSION L"1.3.0"
-static const wchar_t* kAppTitle = L"PC Lockdown 電腦權限管理 v" APP_VERSION;
+static const wchar_t* kAppTitle = APP_TITLE;
 
 // ───────── 密碼 ─────────
 
@@ -154,6 +154,19 @@ static void DoUninstall(HWND dlg) {
     EndDialog(dlg, 2);
 }
 
+// 結束：全部恢復成「開」、停止背景防護、關閉右下角圖示、取消開機自動載入
+// 再執行一次本程式就會恢復運作
+static void DoExitAll(HWND dlg) {
+    if (MessageBoxW(dlg, L"確定要結束嗎？\r\n所有項目都會恢復成「開」，背景防護與右下角圖示也會關閉。",
+                    kAppTitle, MB_ICONQUESTION | MB_YESNO | MB_DEFBUTTON2) != IDYES) return;
+    HCURSOR old = SetCursor(LoadCursorW(NULL, IDC_WAIT));
+    StopProtection();            // 先停服務，避免它把設定改回去
+    ItemAllowAll();
+    CloseTrayIcons();
+    SetCursor(old);
+    EndDialog(dlg, 2);
+}
+
 static INT_PTR CALLBACK MainDlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
     (void)lp;
     switch (msg) {
@@ -165,7 +178,8 @@ static INT_PTR CALLBACK MainDlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
         }
         SetDlgItemTextW(dlg, IDC_CHPWD, L"變更密碼");
         SetDlgItemTextW(dlg, IDC_UNINSTALL, L"解除安裝");
-        SetDlgItemTextW(dlg, IDCANCEL, L"關閉");
+        SetDlgItemTextW(dlg, IDCANCEL, L"執行");
+        SetDlgItemTextW(dlg, IDC_EXITALL, L"結束");
         wchar_t os[200];
         GetOsText(os, 200);
         SetDlgItemTextW(dlg, IDC_SYSINFO, os);
@@ -200,6 +214,9 @@ static INT_PTR CALLBACK MainDlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
             return TRUE;
         case IDC_UNINSTALL:
             DoUninstall(dlg);
+            return TRUE;
+        case IDC_EXITALL:
+            DoExitAll(dlg);
             return TRUE;
         case IDCANCEL:
             EndDialog(dlg, 0);
@@ -251,7 +268,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int) {
 
     INT_PTR r = DialogBoxParamW(inst, MAKEINTRESOURCEW(IDD_MAIN), NULL, MainDlgProc, 0);
     if (mtx) CloseHandle(mtx);
-    // 關閉管理畫面後回到右下角圖示（解除安裝時不用）
+    // 按「執行」後回到右下角圖示（結束、解除安裝時不用）
     if (r != 2) EnsureTrayRunning();
     return 0;
 }

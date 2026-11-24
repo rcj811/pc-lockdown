@@ -3,6 +3,7 @@
 #include "tray.h"
 #include "sys.h"
 #include "service.h"
+#include "app.h"
 
 #define WM_TRAYICON (WM_APP + 1)
 #define ID_OPEN 100
@@ -28,17 +29,38 @@ static void AddIcon(HWND wnd) {
 }
 
 bool LaunchGui() {
+    // 管理畫面已經開著：拉到最前面就好，不要再開一個
+    HWND w = FindWindowW(NULL, APP_TITLE);
+    if (w) {
+        ShowWindow(w, SW_RESTORE);
+        SetForegroundWindow(w);
+        return true;
+    }
+    // 3 秒內重複點擊（正在等 UAC 或密碼視窗）不重複開啟
+    static DWORD last = 0;
+    DWORD now = GetTickCount();
+    if (last && now - last < 3000) return true;
+    last = now;
+
     wchar_t self[MAX_PATH];
     GetModuleFileNameW(NULL, self, MAX_PATH);
     SHELLEXECUTEINFOW sei; ZeroMemory(&sei, sizeof(sei));
     sei.cbSize = sizeof(sei);
-    sei.fMask = SEE_MASK_NOASYNC;
+    sei.fMask = SEE_MASK_NOASYNC | 0x00800000;  // SEE_MASK_NOZONECHECKS：不要跳「安全性警告」
     // 已經是管理員（XP 管理員帳號）直接開；否則要求提升權限（Win7+ 跳 UAC，XP 跳「執行身分」）
     sei.lpVerb = IsAdmin() ? L"open" : L"runas";
     sei.lpFile = self;
     sei.lpParameters = L"/gui /elevated";
     sei.nShow = SW_SHOWNORMAL;
     return ShellExecuteExW(&sei) != FALSE;
+}
+
+void CloseTrayIcons() {
+    for (int i = 0; i < 20; i++) {
+        HWND w = FindWindowW(TRAY_CLASS, NULL);
+        if (!w) break;
+        SendMessageTimeoutW(w, WM_CLOSE, 0, 0, SMTO_ABORTIFHUNG, 2000, NULL);
+    }
 }
 
 static LRESULT CALLBACK TrayProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -48,7 +70,7 @@ static LRESULT CALLBACK TrayProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     switch (msg) {
     case WM_TRAYICON:
-        if (lp == WM_LBUTTONUP || lp == WM_LBUTTONDBLCLK) {
+        if (lp == WM_LBUTTONUP) {
             LaunchGui();
         } else if (lp == WM_RBUTTONUP) {
             HMENU m = CreatePopupMenu();

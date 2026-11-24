@@ -7,5 +7,7 @@
 int RunTray();
 // 以系統管理員身分開啟管理畫面（需要時跳出 UAC）
 bool LaunchGui();
+// 關掉所有右下角圖示
+void CloseTrayIcons();
 // 右下角圖示沒在執行就啟動它
 void EnsureTrayRunning();
