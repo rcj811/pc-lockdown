@@ -11,11 +11,17 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
       - name: 安裝 MinGW-w64 交叉編譯器
-        run: sudo apt-get update && sudo apt-get install -y g++-mingw-w64-i686 binutils-mingw-w64-i686
+        run: |
+          # 關閉 man-db 自動更新，否則安裝套件會卡很久
+          echo "set man-db/auto-update false" | sudo debconf-communicate >/dev/null
+          sudo rm -f /var/lib/man-db/auto-update
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends g++-mingw-w64-i686-win32 binutils-mingw-w64-i686
 
       - name: 編譯
         run: sh ./build.sh
