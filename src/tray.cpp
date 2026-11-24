@@ -24,7 +24,7 @@ static void AddIcon(HWND wnd) {
     gNid.uCallbackMessage = WM_TRAYICON;
     gNid.hIcon = (HICON)LoadImageW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(1), IMAGE_ICON,
                                    GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0);
-    lstrcpynW(gNid.szTip, L"PC Lockdown 電腦權限管理", 64);
+    lstrcpynW(gNid.szTip, L"Lockdown", 64);
     Shell_NotifyIconW(NIM_ADD, &gNid);
 }
 

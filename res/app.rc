@@ -7,7 +7,7 @@
 
 IDD_MAIN DIALOGEX 0, 0, 220, 218
 STYLE DS_SHELLFONT | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
-CAPTION "PC Lockdown"
+CAPTION "Lockdown"
 FONT 9, "MS Shell Dlg", 0, 0, 1
 BEGIN
     LTEXT           "", 2100, 14, 13, 134, 10
@@ -50,8 +50,8 @@ BEGIN
 END
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,4,0,0
- PRODUCTVERSION 1,4,0,0
+ FILEVERSION 1,5,0,0
+ PRODUCTVERSION 1,5,0,0
  FILEOS VOS_NT_WINDOWS32
  FILETYPE VFT_APP
 BEGIN
@@ -59,10 +59,10 @@ BEGIN
     BEGIN
         BLOCK "040404b0"
         BEGIN
-            VALUE "FileDescription", "PC Lockdown"
-            VALUE "FileVersion", "1.4.0"
-            VALUE "ProductName", "PC Lockdown"
-            VALUE "ProductVersion", "1.4.0"
+            VALUE "FileDescription", "Lockdown"
+            VALUE "FileVersion", "1.5.0"
+            VALUE "ProductName", "Lockdown"
+            VALUE "ProductVersion", "1.5.0"
         END
     END
     BLOCK "VarFileInfo"

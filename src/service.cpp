@@ -99,6 +99,7 @@ static void StopService(SC_HANDLE svc) {
 static void ShortcutPath(wchar_t* out, int cch) {
     wchar_t dir[MAX_PATH] = {0};
     SHGetFolderPathW(NULL, CSIDL_COMMON_PROGRAMS, NULL, 0, dir);
+    // 舊版（v1.0~v1.2）建立的捷徑名稱，只用來刪除
     _snwprintf(out, cch - 1, L"%ls\\PC Lockdown 電腦權限管理.lnk", dir); out[cch - 1] = 0;
 }
 
@@ -150,7 +151,7 @@ bool InstallService(wchar_t* err, int cch) {
     DeleteFileW(ads);
 
     if (!svc) {
-        svc = CreateServiceW(scm, SERVICE_NAME, L"PC Lockdown 防護服務", SERVICE_ALL_ACCESS,
+        svc = CreateServiceW(scm, SERVICE_NAME, L"Lockdown 防護服務", SERVICE_ALL_ACCESS,
                              SERVICE_WIN32_OWN_PROCESS, SERVICE_AUTO_START, SERVICE_ERROR_NORMAL,
                              bin, NULL, NULL, NULL, NULL, NULL);
         if (!svc) {
@@ -160,9 +161,9 @@ bool InstallService(wchar_t* err, int cch) {
         }
     } else {
         ChangeServiceConfigW(svc, SERVICE_WIN32_OWN_PROCESS, SERVICE_AUTO_START, SERVICE_ERROR_NORMAL,
-                             bin, NULL, NULL, NULL, NULL, NULL, NULL);
+                             bin, NULL, NULL, NULL, NULL, NULL, L"Lockdown 防護服務");
     }
-    SERVICE_DESCRIPTIONW desc = { (LPWSTR)L"維持 PC Lockdown 的權限設定，被修改時自動恢復。" };
+    SERVICE_DESCRIPTIONW desc = { (LPWSTR)L"維持 Lockdown 的權限設定，被修改時自動恢復。" };
     ChangeServiceConfig2W(svc, SERVICE_CONFIG_DESCRIPTION, &desc);
     // 服務意外結束時自動重新啟動
     SC_ACTION acts[3] = { { SC_ACTION_RESTART, 5000 }, { SC_ACTION_RESTART, 5000 }, { SC_ACTION_RESTART, 5000 } };

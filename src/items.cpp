@@ -155,7 +155,7 @@ static bool InstallApply(bool allow) {
         _snwprintf(p, 299, L"%ls\\%ls", kSaferPaths, kSaferRules[i].guid); p[299] = 0;
         ok &= RegWriteExpandString(HKEY_LOCAL_MACHINE, p, L"ItemData", kSaferRules[i].path);
         ok &= RegWriteDword(HKEY_LOCAL_MACHINE, p, L"SaferFlags", 0);
-        ok &= RegWriteString(HKEY_LOCAL_MACHINE, p, L"Description", L"PC Lockdown");
+        ok &= RegWriteString(HKEY_LOCAL_MACHINE, p, L"Description", L"Lockdown");
         RegWriteQword(HKEY_LOCAL_MACHINE, p, L"LastModified", now);
     }
     ok &= RegWriteDword(HKEY_LOCAL_MACHINE, kSafer, L"PcLockdown", 1);

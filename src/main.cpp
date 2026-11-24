@@ -1,4 +1,4 @@
-// PC Lockdown — Windows 權限開關
+// Lockdown — Windows 權限開關
 // 目標：Windows XP SP3 ~ Windows 11，單一 exe、免安裝執行環境
 #include <windows.h>
 #include <commctrl.h>
