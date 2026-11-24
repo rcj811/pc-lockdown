@@ -10,9 +10,10 @@
 #include "sys.h"
 #include "items.h"
 #include "service.h"
+#include "tray.h"
 #include "sha256.h"
 
-#define APP_VERSION L"1.2.0"
+#define APP_VERSION L"1.3.0"
 static const wchar_t* kAppTitle = L"PC Lockdown 電腦權限管理 v" APP_VERSION;
 
 // ───────── 密碼 ─────────
@@ -150,7 +151,7 @@ static void DoUninstall(HWND dlg) {
     RegDeleteTreeAt(HKEY_LOCAL_MACHINE, kAppKey);
     SetCursor(old);
     MessageBoxW(dlg, L"已解除安裝。部分項目要重新開機後才會完全恢復。", kAppTitle, MB_ICONINFORMATION);
-    EndDialog(dlg, 0);
+    EndDialog(dlg, 2);
 }
 
 static INT_PTR CALLBACK MainDlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
@@ -164,14 +165,15 @@ static INT_PTR CALLBACK MainDlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
         }
         SetDlgItemTextW(dlg, IDC_CHPWD, L"變更密碼");
         SetDlgItemTextW(dlg, IDC_UNINSTALL, L"解除安裝");
-        SetDlgItemTextW(dlg, IDCANCEL, L"結束");
+        SetDlgItemTextW(dlg, IDCANCEL, L"關閉");
         wchar_t os[200];
         GetOsText(os, 200);
         SetDlgItemTextW(dlg, IDC_SYSINFO, os);
-        HICON ic = LoadIconW(NULL, MAKEINTRESOURCEW(32518));  // IDI_SHIELD，XP 沒有時回傳 NULL
-        if (!ic) ic = LoadIconW(NULL, IDI_APPLICATION);
-        SendMessageW(dlg, WM_SETICON, ICON_BIG, (LPARAM)ic);
-        SendMessageW(dlg, WM_SETICON, ICON_SMALL, (LPARAM)ic);
+        HINSTANCE inst = GetModuleHandleW(NULL);
+        SendMessageW(dlg, WM_SETICON, ICON_BIG, (LPARAM)LoadImageW(inst, MAKEINTRESOURCEW(1), IMAGE_ICON,
+                     GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), 0));
+        SendMessageW(dlg, WM_SETICON, ICON_SMALL, (LPARAM)LoadImageW(inst, MAKEINTRESOURCEW(1), IMAGE_ICON,
+                     GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0));
         return TRUE;
     }
     case WM_COMMAND: {
@@ -211,24 +213,31 @@ static INT_PTR CALLBACK MainDlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
 
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int) {
     if (cmd && wcsstr(cmd, L"/service")) return RunAsService();
+    if (cmd && wcsstr(cmd, L"/tray")) return RunTray();
 
-    // 同時只允許開一個
+    // 管理畫面需要系統管理員權限：不是的話要求提升（Win7+ 跳 UAC）
+    if (!IsAdmin()) {
+        if (cmd && wcsstr(cmd, L"/elevated")) {
+            MessageBoxW(NULL, L"請用「系統管理員」帳號執行本程式。", kAppTitle, MB_ICONERROR);
+        } else if (!LaunchGui()) {
+            MessageBoxW(NULL, L"請用「系統管理員」帳號執行本程式。", kAppTitle, MB_ICONERROR);
+        }
+        return 1;
+    }
+
+    // 同時只允許開一個管理畫面
     HANDLE mtx = CreateMutexW(NULL, TRUE, L"PcLockdown_SingleInstance");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         HWND w = FindWindowW(NULL, kAppTitle);
-        if (w) SetForegroundWindow(w);
+        if (w) { ShowWindow(w, SW_RESTORE); SetForegroundWindow(w); }
         return 0;
     }
 
     INITCOMMONCONTROLSEX icc = { sizeof(icc), ICC_STANDARD_CLASSES };
     if (!InitCommonControlsEx(&icc)) InitCommonControls();
 
-    if (!IsAdmin()) {
-        MessageBoxW(NULL, L"請用「系統管理員」帳號執行本程式。", kAppTitle, MB_ICONERROR);
-        return 1;
-    }
-
-    if (!PasswordIsSet()) {
+    bool firstRun = !PasswordIsSet();
+    if (firstRun) {
         MessageBoxW(NULL, L"第一次使用，請先設定管理密碼。", kAppTitle, MB_ICONINFORMATION);
         if (!RunPwdDialog(NULL, 1)) return 0;
     } else if (!RunPwdDialog(NULL, 0)) {
@@ -240,7 +249,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int) {
     if (!InstallService(err, 512))
         MessageBoxW(NULL, err, L"背景服務安裝失敗", MB_ICONWARNING);
 
-    DialogBoxParamW(inst, MAKEINTRESOURCEW(IDD_MAIN), NULL, MainDlgProc, 0);
+    INT_PTR r = DialogBoxParamW(inst, MAKEINTRESOURCEW(IDD_MAIN), NULL, MainDlgProc, 0);
     if (mtx) CloseHandle(mtx);
+    // 關閉管理畫面後回到右下角圖示（解除安裝時不用）
+    if (r != 2) EnsureTrayRunning();
     return 0;
 }

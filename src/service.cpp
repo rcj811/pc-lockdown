@@ -4,6 +4,7 @@
 #include "service.h"
 #include "items.h"
 #include "sys.h"
+#include "reg.h"
 
 static SERVICE_STATUS_HANDLE gStatusHandle;
 static SERVICE_STATUS gStatus;
@@ -100,24 +101,16 @@ static void ShortcutPath(wchar_t* out, int cch) {
     _snwprintf(out, cch - 1, L"%ls\\PC Lockdown 電腦權限管理.lnk", dir); out[cch - 1] = 0;
 }
 
-static void CreateShortcut(const wchar_t* target) {
-    wchar_t lnk[MAX_PATH];
-    ShortcutPath(lnk, MAX_PATH);
-    if (GetFileAttributesW(lnk) != INVALID_FILE_ATTRIBUTES) return;
-    CoInitialize(NULL);
-    IShellLinkW* sl = NULL;
-    if (SUCCEEDED(CoCreateInstance(CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER, IID_IShellLinkW, (void**)&sl))) {
-        sl->SetPath(target);
-        sl->SetDescription(L"PC Lockdown 電腦權限管理");
-        IPersistFile* pf = NULL;
-        if (SUCCEEDED(sl->QueryInterface(IID_IPersistFile, (void**)&pf))) {
-            pf->Save(lnk, TRUE);
-            pf->Release();
-        }
-        sl->Release();
-    }
-    CoUninitialize();
+// 開機自動載入右下角圖示（HKLM\\...\\Run，所有使用者登入時都會啟動）
+static const wchar_t* kRunKey = L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run";
+
+static void RegisterAutoStart(const wchar_t* target) {
+    wchar_t cmd[MAX_PATH + 32];
+    _snwprintf(cmd, MAX_PATH + 31, L"\"%ls\" /tray", target); cmd[MAX_PATH + 31] = 0;
+    RegWriteString(HKEY_LOCAL_MACHINE, kRunKey, L"PcLockdown", cmd);
 }
+
+void GetInstalledExe(wchar_t* out, int cch) { InstalledExe(out, cch); }
 
 bool InstallService(wchar_t* err, int cch) {
     wchar_t self[MAX_PATH], dir[MAX_PATH], target[MAX_PATH], bin[MAX_PATH + 32];
@@ -174,7 +167,11 @@ bool InstallService(wchar_t* err, int cch) {
         StartServiceW(svc, 0, NULL);
     CloseServiceHandle(svc);
     CloseServiceHandle(scm);
-    CreateShortcut(target);
+    // 舊版建立的開始功能表捷徑：刪掉
+    wchar_t lnk[MAX_PATH];
+    ShortcutPath(lnk, MAX_PATH);
+    DeleteFileW(lnk);
+    RegisterAutoStart(target);
     return true;
 }
 
@@ -195,6 +192,13 @@ void UninstallService() {
     InstallDir(dir, MAX_PATH);
     ShortcutPath(lnk, MAX_PATH);
     DeleteFileW(lnk);
+    RegDeleteValueAt(HKEY_LOCAL_MACHINE, kRunKey, L"PcLockdown");
+    // 關掉所有右下角圖示
+    HWND w;
+    while ((w = FindWindowW(L"PcLockdownTray", NULL)) != NULL) {
+        SendMessageTimeoutW(w, WM_CLOSE, 0, 0, SMTO_ABORTIFHUNG, 2000, NULL);
+        if (FindWindowW(L"PcLockdownTray", NULL) == w) break;
+    }
     if (lstrcmpiW(self, target) == 0) {
         // 正在執行的就是安裝的那份：重新開機後刪除
         MoveFileExW(target, NULL, MOVEFILE_DELAY_UNTIL_REBOOT);
