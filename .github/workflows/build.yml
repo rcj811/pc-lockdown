@@ -10,18 +10,27 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 20
+    # 在乾淨的 Ubuntu 24.04 容器裡編譯，避開 runner 預設的大量第三方套件來源
+    container: ubuntu:24.04
+    defaults:
+      run:
+        shell: bash
     steps:
-      - uses: actions/checkout@v4
-
-      - name: 安裝 MinGW-w64 交叉編譯器
+      - name: 安裝 MinGW-w64 交叉編譯器與工具
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          # 關閉 man-db 自動更新，否則安裝套件會卡很久
-          echo "set man-db/auto-update false" | sudo debconf-communicate >/dev/null
-          sudo rm -f /var/lib/man-db/auto-update
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends g++-mingw-w64-i686-win32 binutils-mingw-w64-i686
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends \
+            g++-mingw-w64-i686-win32 binutils-mingw-w64-i686 git ca-certificates curl gpg
+          # gh CLI（更新下載頁用）
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
+          apt-get update -qq && apt-get install -y -qq gh
+
+      - uses: actions/checkout@v4
 
       - name: 編譯
         run: sh ./build.sh
@@ -41,7 +50,9 @@ jobs:
       - name: 更新「latest」下載頁
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           gh release delete latest -y --cleanup-tag || true
           gh release create latest dist/PcLockdown.exe \
             --title "PC Lockdown 最新版" \
